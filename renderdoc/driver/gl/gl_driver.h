@@ -571,6 +571,9 @@ public:
     // pre-calculated bindpoint mapping for SPIR-V shaders. NOT valid for normal GLSL shaders
     ShaderBindpointMapping mapping;
 
+	// used when reflecting a stage shader consisting from multiple shader objects
+	vector<string> libSources;
+
     void ProcessCompilation(WrappedOpenGL &drv, ResourceId id, GLuint realShader);
     void ProcessSPIRVCompilation(WrappedOpenGL &drv, ResourceId id, GLuint realShader,
                                  const GLchar *pEntryPoint, GLuint numSpecializationConstants,

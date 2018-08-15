@@ -31,6 +31,8 @@ int ParseVersionStatement(const char *version);
 void MakeShaderReflection(GLenum shadType, GLuint sepProg, ShaderReflection &refl,
                           bool pointSizeUsed, bool clipDistanceUsed);
 GLuint MakeSeparableShaderProgram(WrappedOpenGL &drv, GLenum type, std::vector<std::string> sources,
+								  vector<string> *includepaths);
+GLuint MakeSeparableShaderProgram(WrappedOpenGL &drv, GLenum type, std::vector<std::vector<std::string>> shaderSources,
                                   vector<string> *includepaths);
 void CheckVertexOutputUses(const std::vector<std::string> &sources, bool &pointSizeUsed,
                            bool &clipDistanceUsed);

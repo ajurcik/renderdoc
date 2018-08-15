@@ -115,45 +115,52 @@ void CheckVertexOutputUses(const vector<string> &sources, bool &pointSizeUsed, b
 
 // little utility function that if necessary emulates glCreateShaderProgramv functionality but using
 // glCompileShaderIncludeARB
-static GLuint CreateSepProgram(WrappedOpenGL &driver, GLenum type, GLsizei numSources,
-                               const char **sources, GLsizei numPaths, const char **paths)
+static GLuint CreateSepProgram(WrappedOpenGL &driver, GLenum type, vector<GLsizei> shaderNumSources,
+                               vector<const char **> shaderSources, GLsizei numPaths, const char **paths)
 {
   // by the nature of this function, it might fail - we don't want to spew
   // false positive looking messages into the log.
   driver.SuppressDebugMessages(true);
 
-  GLuint program = 0;
-
-  // definition of glCreateShaderProgramv from the spec
-  GLuint shader = GL.glCreateShader(type);
-  if(shader)
+  GLuint program = GL.glCreateProgram();
+  if (program)
   {
-    GL.glShaderSource(shader, numSources, sources, NULL);
+	  GL.glProgramParameteri(program, eGL_PROGRAM_SEPARABLE, GL_TRUE);
 
-    if(paths == NULL)
-      GL.glCompileShader(shader);
-    else
-      GL.glCompileShaderIncludeARB(shader, numPaths, paths, NULL);
+	  vector<GLuint> shaders;
+	  for (int s = 0; s < shaderSources.size(); s++) {
+		  // definition of glCreateShaderProgramv from the spec
+		  GLuint shader = GL.glCreateShader(type);
+		  if (shader)
+		  {
+			  shaders.push_back(shader);
 
-    program = GL.glCreateProgram();
-    if(program)
-    {
-      GLint compiled = 0;
+			  GL.glShaderSource(shader, shaderNumSources[s], shaderSources[s], NULL);
 
-      GL.glGetShaderiv(shader, eGL_COMPILE_STATUS, &compiled);
-      GL.glProgramParameteri(program, eGL_PROGRAM_SEPARABLE, GL_TRUE);
+			  if (paths == NULL)
+				  GL.glCompileShader(shader);
+			  else
+				  GL.glCompileShaderIncludeARB(shader, numPaths, paths, NULL);
 
-      if(compiled)
-      {
-        GL.glAttachShader(program, shader);
-        GL.glLinkProgram(program);
+			  GLint compiled = 0;
+			  GL.glGetShaderiv(shader, eGL_COMPILE_STATUS, &compiled);
 
-        // we deliberately leave the shaders attached so this program can be re-linked.
-        // they will be cleaned up when the program is deleted
-        // driver.glDetachShader(program, shader);
-      }
-    }
-    GL.glDeleteShader(shader);
+			  if (compiled)
+			  {
+				  GL.glAttachShader(program, shader);
+
+				  // we deliberately leave the shaders attached so this program can be re-linked.
+				  // they will be cleaned up when the program is deleted
+				  // driver.glDetachShader(program, shader);
+			  }
+		  }
+	  }
+
+	  GL.glLinkProgram(program);
+
+	  for (GLuint s : shaders) {
+		  GL.glDeleteShader(s);
+	  }
   }
 
   driver.SuppressDebugMessages(false);
@@ -176,6 +183,12 @@ static bool iswhitespace(char c)
 }
 
 GLuint MakeSeparableShaderProgram(WrappedOpenGL &drv, GLenum type, vector<string> sources,
+                                  vector<string> *includepaths)
+{
+	return MakeSeparableShaderProgram(drv, type, vector<vector<string>>(1, sources), includepaths);
+}
+
+GLuint MakeSeparableShaderProgram(WrappedOpenGL &drv, GLenum type, vector<vector<string>> shaderSources,
                                   vector<string> *includepaths)
 {
   // in and out blocks are added separately, in case one is there already
@@ -205,9 +218,16 @@ GLuint MakeSeparableShaderProgram(WrappedOpenGL &drv, GLenum type, vector<string
         "out gl_PerVertex { vec4 gl_Position; float gl_PointSize; float gl_ClipDistance[]; };\n";
   }
 
-  const char **strings = new const char *[sources.size()];
-  for(size_t i = 0; i < sources.size(); i++)
-    strings[i] = sources[i].c_str();
+  vector<const char **> shaderStrings;
+  vector<GLsizei> shaderNumStrings;
+  for (size_t s = 0; s < shaderSources.size(); s++)
+  {
+	  shaderStrings.push_back(new const char *[shaderSources[s].size()]);
+	  for (size_t i = 0; i < shaderSources[s].size(); i++)
+		  shaderStrings[s][i] = shaderSources[s][i].c_str();
+
+	  shaderNumStrings.push_back((GLsizei)shaderSources[s].size());
+  }
 
   const char **paths = NULL;
   GLsizei numPaths = 0;
@@ -220,10 +240,12 @@ GLuint MakeSeparableShaderProgram(WrappedOpenGL &drv, GLenum type, vector<string
       paths[i] = (*includepaths)[i].c_str();
   }
 
-  GLuint sepProg = CreateSepProgram(drv, type, (GLsizei)sources.size(), strings, numPaths, paths);
+  GLuint sepProg = CreateSepProgram(drv, type, shaderNumStrings, shaderStrings, numPaths, paths);
 
   GLint status;
   drv.glGetProgramiv(sepProg, eGL_LINK_STATUS, &status);
+
+  // TODO also process per shader
 
   // allow any vertex processing shader to redeclare gl_PerVertex
   // on GLES it is not required
@@ -240,8 +262,9 @@ GLuint MakeSeparableShaderProgram(WrappedOpenGL &drv, GLenum type, vector<string
     // we start by concatenating the source strings to make parsing easier.
     std::string combined;
 
-    for(size_t i = 0; i < sources.size(); i++)
-      combined += sources[i];
+	for(size_t s = 0; s < shaderSources.size(); s++)
+      for(size_t i = 0; i < shaderSources[s].size(); i++)
+        combined += shaderSources[s][i];
 
     for(int attempt = 0; attempt < 2; attempt++)
     {
@@ -486,7 +509,7 @@ GLuint MakeSeparableShaderProgram(WrappedOpenGL &drv, GLenum type, vector<string
 
       const char *c_src = src.c_str();
 
-      sepProg = CreateSepProgram(drv, type, 1, &c_src, numPaths, paths);
+      sepProg = CreateSepProgram(drv, type, vector<GLsizei>(1, 1), vector<const char **>(1, &c_src), numPaths, paths);
 
       // when we get it to link, bail!
       drv.glGetProgramiv(sepProg, eGL_LINK_STATUS, &status);
@@ -509,7 +532,8 @@ GLuint MakeSeparableShaderProgram(WrappedOpenGL &drv, GLenum type, vector<string
     sepProg = 0;
   }
 
-  delete[] strings;
+  for(const char** s : shaderStrings)
+	delete[] s;
   if(paths)
     delete[] paths;
 

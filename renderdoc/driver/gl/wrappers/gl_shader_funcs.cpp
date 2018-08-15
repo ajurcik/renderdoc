@@ -240,8 +240,12 @@ void WrappedOpenGL::ShaderData::ProcessCompilation(WrappedOpenGL &drv, ResourceI
   }
   else
   {
+	vector<vector<string>> shaderSources(1, sources);
+	for (string s : libSources)
+	  shaderSources.push_back(vector<string>(1, s));
+
     if(sepProg == 0 && status == 1)
-      sepProg = MakeSeparableShaderProgram(drv, type, sources, NULL);
+      sepProg = MakeSeparableShaderProgram(drv, type, shaderSources, NULL);
 
     if(status == 0)
     {
@@ -452,8 +456,9 @@ bool WrappedOpenGL::Serialise_glCompileShader(SerialiserType &ser, GLuint shader
 
     GL.glCompileShader(shader.name);
 
-    m_Shaders[liveId].ProcessCompilation(*this, GetResourceManager()->GetOriginalID(liveId),
-                                         shader.name);
+	// // defer ProcessCompilation to Serialise_glLinkProgram
+    /*m_Shaders[liveId].ProcessCompilation(*this, GetResourceManager()->GetOriginalID(liveId),
+                                         shader.name);*/
 
     AddResourceInitChunk(shader);
   }
@@ -847,11 +852,66 @@ bool WrappedOpenGL::Serialise_glLinkProgram(SerialiserType &ser, GLuint programH
 
     for(size_t s = 0; s < 6; s++)
     {
+	  // get all stage shaders
+	  std::vector<ResourceId> stageShaders;
       for(size_t sh = 0; sh < progDetails.shaders.size(); sh++)
       {
-        if(m_Shaders[progDetails.shaders[sh]].type == ShaderEnum(s))
-          progDetails.stageShaders[s] = progDetails.shaders[sh];
+		if(m_Shaders[progDetails.shaders[sh]].type == ShaderEnum(s))
+		  stageShaders.push_back(progDetails.shaders[sh]);
       }
+
+	  ResourceId mainId;
+
+	  if (stageShaders.size() > 1) {
+		  // find shader with main, there should be only and only one per stage
+		  for (auto &shad : stageShaders) {
+			  // TODO handle better main() search
+			  if (m_Shaders[shad].sources[0].find("main") != std::string::npos) {
+				  mainId = shad;
+			  }
+		  }
+
+		  ShaderData &main = m_Shaders[mainId];
+
+		  // TODO compile shaders separately instead of deleting #version and concatenating
+		  // combine sources in order to enable reflection
+		  for (auto &shad : stageShaders) {
+			  // there can be only one main
+			  if (shad != mainId) {
+				  for (std::string &src : m_Shaders[shad].sources) {
+					  std::string append(src);
+					  // TODO handle better #version search, extract from ShaderData::ProcessCompilation?
+					  /*size_t off = src.find("#version");
+					  if (off != std::string::npos) {
+						  size_t end = off + 8;
+						  // skip spaces
+						  while (isspace(src.at(end))) {
+							  end++;
+						  }
+						  // skip digits
+						  while (isdigit(src.at(end))) {
+							  end++;
+						  }
+						  std::string ver = append.substr(off, end - off);
+						  append.replace(off, end - off, "// " + ver); // comment #version ddd
+					  }*/
+					  main.libSources.push_back(append);
+				  }
+			  }
+		  }
+	  }
+	  else if (stageShaders.size() == 1)
+	  {
+		  mainId = stageShaders[0];
+	  }
+
+	  if (mainId != ResourceId()) {
+		  progDetails.stageShaders[s] = mainId;
+
+		  GLResource shader = GetResourceManager()->GetCurrentResource(mainId);
+
+		  m_Shaders[mainId].ProcessCompilation(*this, mainId, shader.name);
+	  }
     }
 
     GL.glLinkProgram(program.name);
@@ -1742,7 +1802,8 @@ bool WrappedOpenGL::Serialise_glCompileShaderIncludeARB(SerialiserType &ser, GLu
 
     GL.glCompileShaderIncludeARB(shader.name, count, path, NULL);
 
-    shadDetails.ProcessCompilation(*this, GetResourceManager()->GetOriginalID(liveId), shader.name);
+	// defer ProcessCompilation to Serialise_glLinkProgram
+    /*shadDetails.ProcessCompilation(*this, GetResourceManager()->GetOriginalID(liveId), shader.name);*/
 
     AddResourceInitChunk(shader);
   }
